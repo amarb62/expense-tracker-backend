@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: expense-tracker
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:expensetracker}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:amarbarik}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_FILE_SIZE:10MB}
+      max-request-size: ${MAX_UPLOAD_FILE_SIZE:10MB}
+
+server:
+  port: ${SERVER_PORT:8085}
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:kvpAdzeeQdDCwDfjuad9zM1bA5CTPlhQIXuCnOaOUTNRnkl6vqUhKepVV3laUkKzMKuQE8NZZWhJSO00PVNnh0}
+    access-token-expiration-minutes: ${JWT_ACCESS_EXPIRATION_MINUTES:15}
+    refresh-token-expiration-days: ${JWT_REFRESH_EXPIRATION_DAYS:30}
+  file-storage:
+    root-directory: ${FILE_STORAGE_ROOT:./storage/statements}
+  upload:
+    max-file-size-bytes: ${MAX_UPLOAD_FILE_SIZE_BYTES:10485760}
+    allowed-extensions: pdf
+
+expense-ai:
+  enabled: ${EXPENSE_AI_ENABLED:true}
+  provider: ${EXPENSE_AI_PROVIDER:local}
+  confidence:
+    auto-approve: 0.85
+    review: 0.60
+  local:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    model: ${OLLAMA_MODEL:llama3.1}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.amar.expense_tracker: INFO

@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/expensetracker
+    username: postgres
+    password: amarbarik
+
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: validate
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+server:
+  port: 8081
+
+app:
+  jwt:
+    # Local development only. Never reuse this value outside your machine.
+    secret: kvpAdzeeQdDCwDfjuad9zM1bA5CTPlhQIXuCnOaOUTNRnkl6vqUhKepVV3laUkKzMKuQE8NZZWhJSO00PVNnh0
+  file-storage:
+    root-directory: ./storage/statements
+
+expense-ai:
+  enabled: true
+  provider: local
+  local:
+    base-url: http://localhost:11434
+    model: llama3.1
+
+logging:
+  level:
+    com.amar.expense_tracker: DEBUG
