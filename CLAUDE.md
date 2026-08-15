@@ -38,7 +38,7 @@ is completed, stop and get explicit user go-ahead before starting the next one.
 | 9 | Analytics & Dashboard (monthly/yearly/trends, recalculation) | done |
 | 10 | Cross-cutting hardening (security review, global exceptions, Swagger, observability) | done |
 | 11 | Testing (unit + integration w/ Testcontainers) | skipped (user decision, 2026-08-15) |
-| 12 | Docker, docker-compose, README | not started |
+| 12 | Docker, docker-compose, README | done |
 
 ## Environment notes (Spring Boot 4.1.0 gotchas found during Phase 1)
 
@@ -397,3 +397,31 @@ to succeed.
 
 ### Phase 12 — Docker & docs
 Dockerfile, docker-compose.yml (postgres + rabbitmq + backend), README.md.
+
+Done (2026-08-15). `Dockerfile` is a two-stage build (`eclipse-temurin:21-jdk` for
+`./mvnw package -DskipTests`, `eclipse-temurin:21-jre` for runtime, non-root
+`appuser`, `COPY --from=build /build/target/*.jar` — safe against the
+`-jar.original` file spring-boot-maven-plugin leaves behind since that has a
+`.original` extension, not `.jar`). `docker-compose.yml` runs postgres:16-alpine +
+rabbitmq:4-management-alpine (both with healthchecks; backend's `depends_on` waits
+on `service_healthy` for both, not just container-started) + the backend, wired via
+service DNS names, with named volumes for Postgres data and statement file storage.
+`EXPENSE_AI_ENABLED` defaults to `false` in compose since no Ollama container is
+bundled -- confirmed in code (`ExpenseCategorizationService`) that a disabled AI
+flag cleanly skips straight to the OTHER-category fallback rather than erroring, so
+this is a safe default rather than a hidden gap. `.env.example` documents every
+override; `JWT_SECRET`'s compose fallback is the same non-secret placeholder
+already committed in `application.yml` for local dev, explicitly called out in both
+`.env.example` and `README.md` as something to change beyond a quick local trial.
+Added `.env` and `storage/` to `.gitignore`.
+Verified for real: built the full stack via `docker compose ... up --build` (a
+separate `-p expense-tracker-verify` project name + all-remapped host ports, to
+avoid clashing with this machine's other already-running Postgres/RabbitMQ
+containers from unrelated projects), confirmed all three containers reached
+`healthy`/`started`, `/actuator/health` returned UP (implicitly proving Flyway
+migrations ran and the RabbitMQ connection came up, both required for a clean
+boot), then exercised register -> login -> an authenticated `GET /categories` call
+and `/swagger-ui/index.html` end-to-end through the compose network before tearing
+the whole verification stack down (`down -v`, plus the temp env file removed).
+README.md covers the docker-compose quickstart, the local (non-Docker) run path,
+an API endpoint table, and how to turn on Ollama-backed categorization.
