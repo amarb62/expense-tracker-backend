@@ -39,7 +39,7 @@ server:
 
 app:
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000,http://localhost:8080}
   jwt:
     secret: ${JWT_SECRET:kvpAdzeeQdDCwDfjuad9zM1bA5CTPlhQIXuCnOaOUTNRnkl6vqUhKepVV3laUkKzMKuQE8NZZWhJSO00PVNnh0}
     access-token-expiration-minutes: ${JWT_ACCESS_EXPIRATION_MINUTES:15}

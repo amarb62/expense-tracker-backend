@@ -69,6 +69,11 @@ is completed, stop and get explicit user go-ahead before starting the next one.
   Spring-managed bean of the classic `com.fasterxml.jackson.databind.ObjectMapper`
   type. Anything needing that classic type (e.g. `RestAuthenticationEntryPoint`)
   must construct its own `ObjectMapper` locally rather than `@Autowired`/inject it.
+- Same Jackson-3 split hit Spring AMQP 4.1.0: `Jackson2JsonMessageConverter` (in
+  `RabbitMQConfig`) is deprecated-for-removal in favor of `JacksonJsonMessageConverter`
+  (same package, same no-arg-constructor usage, built on `tools.jackson.databind.json.
+  JsonMapper` instead of the classic Jackson 2 `ObjectMapper`) -- swapped in, drop-in
+  replacement, no behavior change.
 - `GlobalExceptionHandler`'s catch-all `Exception` handler will swallow Spring MVC's
   own `NoResourceFoundException` (thrown for unmatched routes) and turn it into a
   500 unless handled explicitly first — added a dedicated `@ExceptionHandler` for it
