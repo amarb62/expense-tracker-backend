@@ -1,14 +1,18 @@
 package com.amar.expense_tracker.statement.controller;
 
 import com.amar.expense_tracker.auth.security.AuthenticatedUser;
+import com.amar.expense_tracker.statement.dto.StatementFile;
 import com.amar.expense_tracker.statement.dto.StatementResponse;
 import com.amar.expense_tracker.statement.service.StatementService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -53,5 +57,22 @@ public class StatementController {
     @Operation(summary = "Get a statement's processing status by ID")
     public StatementResponse get(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
         return statementService.get(user.userId(), id);
+    }
+
+    @GetMapping("/{id}/download")
+    @Operation(summary = "Download the originally-uploaded PDF statement file")
+    public ResponseEntity<byte[]> download(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
+        StatementFile file = statementService.downloadFile(user.userId(), id);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
+                .body(file.content());
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Delete a statement, its transactions, and its stored file, recalculating any affected months")
+    public void delete(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
+        statementService.delete(user.userId(), id);
     }
 }

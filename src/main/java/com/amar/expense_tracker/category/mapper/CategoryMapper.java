@@ -3,6 +3,8 @@ package com.amar.expense_tracker.category.mapper;
 import com.amar.expense_tracker.category.dto.CategoryResponse;
 import com.amar.expense_tracker.category.dto.CategoryType;
 import com.amar.expense_tracker.entity.Categories;
+import com.amar.expense_tracker.transaction.repository.TransactionRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -14,7 +16,10 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Component
+@RequiredArgsConstructor
 public class CategoryMapper {
+
+    private final TransactionRepository transactionRepository;
 
     public List<CategoryResponse> toTree(List<Categories> categories) {
         Set<UUID> presentIds = categories.stream().map(Categories::getId).collect(Collectors.toSet());
@@ -40,6 +45,8 @@ public class CategoryMapper {
                 category.getName(),
                 CategoryType.valueOf(category.getCategoryType()),
                 parent != null ? parent.getId() : null,
+                category.getColor(),
+                transactionRepository.countByCategoryId(category.getId()),
                 category.isActive(),
                 children
         );

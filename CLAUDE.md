@@ -326,6 +326,127 @@ is completed, stop and get explicit user go-ahead before starting the next one.
   this phase, and Actuator was already added in Phase 1; revisit only if the user
   asks for dedicated metrics later.
 
+## Frontend-integration gaps (2026-08-15)
+
+Backend was otherwise done (Phases 1-12); the pre-built React frontend surfaced 5
+concrete gaps closed in this session, all within `expense-tracker-backend` only.
+
+- **CORS**: was entirely absent (no bean, no `.cors(...)`, no `@CrossOrigin`
+  anywhere) -- `SecurityConfig` gained a `corsConfigurationSource()` bean wired via
+  `.cors(cors -> cors.configurationSource(...))` ahead of `.sessionManagement(...)`
+  in the filter chain. Origins come from a new `CorsProperties`
+  (`auth.security`, prefix `app.cors`, alongside `JwtProperties` since it's only
+  ever consumed by `SecurityConfig`) bound to `app.cors.allowed-origins:
+  ${CORS_ALLOWED_ORIGINS:http://localhost:5173}` in `application.yml` (5173 is the
+  frontend's Vite dev port; no other origin was configured anywhere so no other
+  default was needed). Methods GET/POST/PUT/PATCH/DELETE/OPTIONS, headers `*`,
+  `allowCredentials(false)` (bearer-token auth via header, not cookies). Could not
+  add `CORS_ALLOWED_ORIGINS` to `.env.example` -- that file is blocked by a
+  blanket deny-on-`.env*` permission rule in this sandboxed session; the property
+  and its default are fully documented in `application.yml` instead. Verified with
+  a real preflight `OPTIONS` request: `http://localhost:5173` gets
+  `Access-Control-Allow-Origin`/`-Methods`/`-Headers` back correctly, an
+  unconfigured origin (`http://evil.example.com`) gets a 403 "Invalid CORS
+  request" from Spring Security's own CORS filter.
+- **`GET /api/v1/auth/me`**: added, `@AuthenticationPrincipal AuthenticatedUser`
+  -> new `AuthService.getCurrentUser(UUID userId)` -> existing `UserResponse`
+  (`{id, name, email}`, unchanged). `SecurityConfig` needed a matcher *more
+  specific than and ordered before* the existing `/api/v1/auth/**` permitAll
+  rule (`authorizeHttpRequests` matches in declaration order): added
+  `.requestMatchers("/api/v1/auth/me").authenticated()` immediately above it.
+  The class-level `@SecurityRequirements` (which told Swagger the *whole*
+  controller was unauthenticated) was moved off the class and onto each of
+  register/login/refresh/logout individually so `/me` correctly inherits the
+  global bearer-auth requirement instead of also being marked no-auth.
+  Verified: unauthenticated `/me` -> 401; authenticated -> 200 with the exact
+  logged-in user's `{id,name,email}`; register/login/refresh/logout all still
+  reachable with no token; `/v3/api-docs` confirms `/auth/me`'s `security` is
+  absent (inherits global bearerAuth) while `/auth/login`'s is an explicit empty
+  array, matching the Phase 10-verified pattern for the other three.
+- **Category CRUD**: `CategoryController` was read-only (2 GETs, tagged
+  "(read-only)"); added POST/PATCH/POST-deactivate. Categories have no
+  `user_id` (confirmed in `V1__init_schema.sql`) so writes need only
+  authentication, no ownership check -- already covered by
+  `SecurityConfig`'s default `anyRequest().authenticated()` since
+  `/api/v1/categories/**` isn't in any permitAll list.
+  `V3__add_category_color.sql` adds `categories.color VARCHAR(7) NOT NULL
+  DEFAULT '#64748b'` and backfills existing seeded rows with a rotating
+  7-color palette keyed off insertion order (a `ROW_NUMBER() OVER (ORDER BY
+  created_at, id) % 7` `CASE`); note the actual seed count in `V2` is 24 rows,
+  not the 28 the frontend spec assumed -- doesn't matter, the backfill is
+  count-agnostic. New rows always get an explicit caller-supplied `color`; the
+  `DEFAULT` only protects the backfill.
+  `CategoryResponse` gained `color` (String) and `transactionCount` (long,
+  `TransactionRepository.countByCategoryId`, N+1 per tree node -- fine at this
+  scale) -- both populated in `CategoryMapper.toResponse` for every node,
+  root and nested children alike (it already recurses via `buildNode`).
+  New DTOs `CategoryCreateRequest{name, parentId?, color, categoryType}`,
+  `CategoryUpdateRequest{name?, parentId?, color?}` (PATCH semantics -- only
+  non-null fields applied), `CategoryDeactivateRequest{replacementCategoryId?}`.
+  `CategoryService.deactivate`: 0 transactions -> immediate `active=false`;
+  >0 transactions with no `replacementCategoryId` -> 409 (same `ConflictException`
+  pattern as account-deletion-blocked-by-use); `replacementCategoryId` equal to
+  the category being deactivated -> 400; replacement not found/inactive -> 400;
+  otherwise bulk-reassigns via a native `UPDATE transactions SET category_id =
+  ... WHERE category_id = ...` (`TransactionRepository.reassignCategory`) and
+  recalculates analytics. One correctness point beyond the original spec's
+  literal wording: categories are *global*, shared across users, so a single
+  deactivation can reassign transactions belonging to *several different
+  users* -- unlike `TransactionService.patchCategory`'s single-user
+  recalculation, this collects distinct `(userId, year, month)` triples (a
+  private `UserMonth` record) across all reassigned transactions and calls
+  `AnalyticsService.recalculateMonth` once per triple, not once per month.
+  Verified end-to-end: created a category (color/type persisted), PATCHed its
+  name+color, deactivated a zero-transaction category (204 immediate),
+  attempted to deactivate a category with one transaction and no replacement
+  (409), retried with the same category as its own replacement (400), then
+  with a valid different active replacement (204) -- confirmed afterward via
+  `GET` that the source category is `active:false`/`transactionCount:0`, the
+  replacement shows `transactionCount:1`, the transaction's `categoryId`
+  moved, and the affected month's dashboard breakdown recomputed to show the
+  amount under the replacement category.
+- **`DELETE /api/v1/statements/{id}`**: added to `StatementController` +
+  `StatementService`, same `findByIdAndUsers_Id` 404-on-not-found-or-not-owned
+  pattern as the existing GET. Checked `V1__init_schema.sql` before assuming
+  anything about cascades: `transactions.statement_id` is `ON DELETE SET
+  NULL` (so the DB alone would only orphan transactions, not remove them --
+  wrong behavior here, transactions must actually be deleted), while
+  `ai_categorization.transaction_id` is `ON DELETE CASCADE` (so deleting the
+  transaction rows is sufficient; no explicit `ai_categorization` delete
+  needed). One `@Transactional` service method (not self-invoked --
+  called directly from the controller): load owned statement -> load its
+  transactions (`TransactionRepository.findByStatements_Id`, new) -> collect
+  distinct `YearMonth`s from their dates -> `deleteAll` the transactions (DB
+  cascade removes their `ai_categorization` rows) -> call
+  `AnalyticsService.recalculateMonth` once per distinct month (statements are
+  user-scoped so, unlike category deactivation, every affected transaction
+  belongs to the same user) -> delete the stored file via the already-existing
+  `FileStorageService.delete` -> delete the statement row. Returns 204.
+  Verified end-to-end: seeded a statement with a real transaction row and an
+  `ai_categorization` row (direct SQL, simulating what the real PDF pipeline
+  would have produced) in a month whose dashboard total was confirmed
+  non-zero beforehand; after `DELETE`, the statement 404s, the transaction and
+  its `ai_categorization` row are both gone from the DB, the month's dashboard
+  total dropped back to zero, and the file was removed from disk. Also
+  verified cross-user 404 on both this and the download endpoint below.
+- **`GET /api/v1/statements/{id}/download`**: added; same ownership check.
+  `FileStorageService` already had a symmetric `retrieve(String storageKey):
+  InputStream` alongside `store`/`delete` -- no interface change needed. New
+  `StatementService.downloadFile` reads it fully into a byte array (small
+  `StatementFile(fileName, content)` DTO in `statement.dto`) and the
+  controller returns `ResponseEntity<byte[]>` with
+  `Content-Type: application/pdf` and `Content-Disposition: attachment;
+  filename="<original fileName>"`. Verified: downloaded bytes are
+  byte-for-byte identical to the originally-uploaded file, headers correct,
+  cross-user access 404s.
+
+Verified for real against a throwaway (Docker) Postgres + RabbitMQ, same
+pattern as every other phase: registered two users, exercised every item
+above end-to-end via curl (plus a couple of direct `psql` inserts to simulate
+PDF-derived transaction/`ai_categorization` rows without needing a real
+parseable bank statement), confirmed `./mvnw compile` and `./mvnw package
+-DskipTests` both succeed, then tore the throwaway containers down.
+
 ## Phase details
 
 ### Phase 1 — Project setup, config, Flyway baseline, entity fixes

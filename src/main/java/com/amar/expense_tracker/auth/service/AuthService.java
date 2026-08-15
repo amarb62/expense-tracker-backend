@@ -10,6 +10,7 @@ import com.amar.expense_tracker.auth.exception.EmailAlreadyRegisteredException;
 import com.amar.expense_tracker.auth.repository.RefreshTokenRepository;
 import com.amar.expense_tracker.auth.security.JwtProperties;
 import com.amar.expense_tracker.auth.security.JwtService;
+import com.amar.expense_tracker.common.exception.ResourceNotFoundException;
 import com.amar.expense_tracker.common.exception.UnauthorizedException;
 import com.amar.expense_tracker.entity.RefreshTokens;
 import com.amar.expense_tracker.entity.Users;
@@ -29,6 +30,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -77,6 +79,13 @@ public class AuthService {
         existing.setRevoked(true);
         refreshTokenRepository.save(existing);
         return issueTokens(existing.getUsers());
+    }
+
+    @Transactional(readOnly = true)
+    public UserResponse getCurrentUser(UUID userId) {
+        Users user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        return new UserResponse(user.getId(), user.getName(), user.getEmail());
     }
 
     @Transactional

@@ -8,6 +8,8 @@ public record CategoryResponse(
         String name,
         CategoryType categoryType,
         UUID parentId,
+        String color,
+        long transactionCount,
         boolean active,
         List<CategoryResponse> children
 ) {

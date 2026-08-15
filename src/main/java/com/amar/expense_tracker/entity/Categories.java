@@ -27,6 +27,7 @@ public class Categories  implements Serializable {
      private Categories categories;
      private String name;
      private String categoryType;
+     private String color;
      private boolean active;
      private Date createdAt;
      private Date updatedAt;
@@ -102,12 +103,22 @@ public class Categories  implements Serializable {
     public String getCategoryType() {
         return this.categoryType;
     }
-    
+
     public void setCategoryType(String categoryType) {
         this.categoryType = categoryType;
     }
 
-    
+
+    @Column(name="color", nullable=false, length=7)
+    public String getColor() {
+        return this.color;
+    }
+
+    public void setColor(String color) {
+        this.color = color;
+    }
+
+
     @Column(name="active", nullable=false)
     public boolean isActive() {
         return this.active;
