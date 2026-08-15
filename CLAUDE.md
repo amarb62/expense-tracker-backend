@@ -34,7 +34,7 @@ is completed, stop and get explicit user go-ahead before starting the next one.
 | 5 | Statement upload + file storage abstraction + RabbitMQ publish | done |
 | 6 | PDF parsing (Strategy pattern parsers) + merchant normalization + duplicate detection | done (HDFC bank + HDFC credit card + generic; ICICI/SBI pending real samples) |
 | 7 | Transaction APIs (manual expense/income, list/filter, update, category patch) | done |
-| 8 | Categorization engine + AI abstraction (Ollama) + review APIs | not started |
+| 8 | Categorization engine + AI abstraction (Ollama) + review APIs | done |
 | 9 | Analytics & Dashboard (monthly/yearly/trends, recalculation) | not started |
 | 10 | Cross-cutting hardening (security review, global exceptions, Swagger, observability) | not started |
 | 11 | Testing (unit + integration w/ Testcontainers) | not started |
@@ -196,6 +196,58 @@ is completed, stop and get explicit user go-ahead before starting the next one.
   `AnalyticsService`. Phase 7's create/update/delete/patch-category methods do NOT call
   into any recalculation hook yet -- intentional, not an oversight, since that service
   doesn't exist until Phase 9.
+- Phase 8 (2026-08-15): `ExpenseCategorizationService` orchestrates design.md section
+  11's order (user rule -> global `RuleEngine` -> AI -> confidence) and is wired into
+  `StatementTransactionPersister` right after each newly-saved (non-duplicate) PDF
+  transaction is persisted, wrapped in its own try-catch there so a categorization bug
+  never rolls back an otherwise-successful statement's transaction batch. Only DEBIT
+  transactions lacking a category are considered -- manual expense/income always arrive
+  with a user-picked category (Phase 7) and never reach this service.
+  `UserCategoryRuleService` was extracted from `TransactionService` (which used it
+  inline for the Phase 7 category-PATCH endpoint) into `categorization.service` so both
+  it and the new categorization-review endpoints share one upsert path.
+  There's no DB table for "global merchant rules" in the schema (only user-scoped
+  `user_category_rules`), so `RuleEngine` is a small, explicitly non-exhaustive in-code
+  merchant->category map -- easy to extend as more merchants are observed.
+  Confidence routing reads design.md section 13 literally: both the 0.60-0.85 band and
+  the below-0.60 band map to NEEDS_REVIEW per its own three bullet points (only >=0.85
+  differs), so effectively only the auto-approve threshold branches anything today; the
+  "review" threshold is kept in config as a documented no-op. FAILED is reserved
+  separately for genuinely unusable AI output (parse failure, unknown category,
+  out-of-range confidence) -- never for a low-but-valid confidence score.
+  `transactions.source` (PDF/MANUAL/...) is deliberately left untouched by this whole
+  engine -- it's the transaction's origin, not how its category was decided;
+  provenance lives in `ai_categorization.status` + `confidence_score` +
+  `is_category_modified` instead.
+  `LocalLLMCategorizer` calls Ollama once per transaction rather than asking for one
+  JSON array covering a whole batch -- a small local model reliably honoring an
+  exact-array-length instruction is a real risk, and one bad response must not take
+  down the rest of the batch. Each call is independently try-caught; genuine AI
+  failures fall back to the OTHER category and a FAILED `ai_categorization` row, never
+  a crash.
+  No Ollama installation was available in this environment, so real-LLM behavior was
+  not verified. Instead, built a small local HTTP stub (Python `http.server`) simulating
+  Ollama's `/api/generate` response shape, driving every path deliberately: valid
+  high-confidence, valid low-confidence, malformed JSON, a category name outside the
+  valid list, and an out-of-range confidence value -- arguably a *more* thorough test of
+  the resilience logic than a real (non-deterministic) model would give. Building the
+  stub itself surfaced two unrelated infra gotchas worth remembering if this pattern
+  gets reused: (1) Python's bare `http.server` declares HTTP/1.0 by default
+  (`protocol_version` must be set to `"HTTP/1.1"` explicitly, or a client speaking
+  proper HTTP/1.1 semantics gets confused mid-response); (2) Java's HTTP client sends
+  the request body chunked (`Transfer-Encoding: chunked`) rather than with a
+  `Content-Length` header, so a from-scratch Python handler must decode chunked
+  request bodies, not just read `Content-Length` bytes.
+  Verified end-to-end against a throwaway Postgres + RabbitMQ + the stub: user-rule
+  match (confidence 1.0, no AI call), global-rule match (SWIGGY -> FOOD, confidence
+  1.0), AI auto-approve, AI needs-review (correctly appears in `GET .../review` and
+  nowhere else), AI failure paths (malformed JSON / bad category / out-of-range
+  confidence, all correctly falling back to OTHER with a FAILED audit row), approve
+  (flips status, category unchanged, drops out of the review list), and patch (category
+  changed, `is_category_modified` set, audit row flipped to USER_CORRECTED, rule
+  created) -- then re-uploaded a new transaction from the same corrected merchant and
+  confirmed the newly-created rule caught it on the next pass (confidence 1.0, no AI
+  call needed), closing the design.md section 14 feedback loop end-to-end.
 
 ## Phase details
 
