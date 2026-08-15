@@ -10,6 +10,8 @@ import com.amar.expense_tracker.transaction.dto.TransactionSource;
 import com.amar.expense_tracker.transaction.dto.TransactionType;
 import com.amar.expense_tracker.transaction.dto.TransactionUpdateRequest;
 import com.amar.expense_tracker.transaction.service.TransactionService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -35,12 +37,14 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/transactions")
 @RequiredArgsConstructor
+@Tag(name = "Transactions", description = "Manual expense/income entry, listing/filtering, updates, and category patch")
 public class TransactionController {
 
     private final TransactionService transactionService;
 
     @PostMapping("/expenses")
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Manually add an expense (category must be of type EXPENSE)")
     public TransactionResponse createExpense(@AuthenticationPrincipal AuthenticatedUser user,
                                               @Valid @RequestBody ExpenseRequest request) {
         return transactionService.createExpense(user.userId(), request);
@@ -48,12 +52,14 @@ public class TransactionController {
 
     @PostMapping("/income")
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Manually add income (category must be of type INCOME)")
     public TransactionResponse createIncome(@AuthenticationPrincipal AuthenticatedUser user,
                                              @Valid @RequestBody IncomeRequest request) {
         return transactionService.createIncome(user.userId(), request);
     }
 
     @GetMapping
+    @Operation(summary = "List transactions with optional date range/account/category/type/source filters, paginated")
     public PageResponse<TransactionResponse> list(
             @AuthenticationPrincipal AuthenticatedUser user,
             @RequestParam(required = false) LocalDate fromDate,
@@ -68,11 +74,13 @@ public class TransactionController {
     }
 
     @GetMapping("/{id}")
+    @Operation(summary = "Get a transaction by ID")
     public TransactionResponse get(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
         return transactionService.get(user.userId(), id);
     }
 
     @PutMapping("/{id}")
+    @Operation(summary = "Replace a transaction's amount/date/description/category/account/type")
     public TransactionResponse update(@AuthenticationPrincipal AuthenticatedUser user,
                                        @PathVariable UUID id,
                                        @Valid @RequestBody TransactionUpdateRequest request) {
@@ -81,11 +89,15 @@ public class TransactionController {
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Delete a transaction")
     public void delete(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
         transactionService.delete(user.userId(), id);
     }
 
     @PatchMapping("/{id}/category")
+    @Operation(summary = "Change just a transaction's category",
+            description = "Optionally set createRule=true to also create/update a merchant rule so future "
+                    + "transactions from the same merchant are categorized the same way automatically.")
     public TransactionResponse patchCategory(@AuthenticationPrincipal AuthenticatedUser user,
                                               @PathVariable UUID id,
                                               @Valid @RequestBody CategoryPatchRequest request) {

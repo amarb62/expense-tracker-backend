@@ -1,6 +1,7 @@
 package com.amar.expense_tracker.transaction.service;
 
 import com.amar.expense_tracker.account.repository.AccountRepository;
+import com.amar.expense_tracker.analytics.service.AnalyticsService;
 import com.amar.expense_tracker.categorization.service.UserCategoryRuleService;
 import com.amar.expense_tracker.category.repository.CategoryRepository;
 import com.amar.expense_tracker.common.dto.PageResponse;
@@ -50,6 +51,7 @@ public class TransactionService {
     private final MerchantNormalizer merchantNormalizer;
     private final TransactionHasher transactionHasher;
     private final TransactionMapper transactionMapper;
+    private final AnalyticsService analyticsService;
 
     @Transactional
     public TransactionResponse createExpense(UUID userId, ExpenseRequest request) {
@@ -59,7 +61,9 @@ public class TransactionService {
 
         Transactions transaction = buildManualTransaction(account, user, category,
                 request.date(), request.description(), request.amount(), "DEBIT");
-        return transactionMapper.toResponse(transactionRepository.save(transaction));
+        Transactions saved = transactionRepository.save(transaction);
+        analyticsService.recalculateMonth(userId, request.date().getYear(), request.date().getMonthValue());
+        return transactionMapper.toResponse(saved);
     }
 
     @Transactional
@@ -70,7 +74,9 @@ public class TransactionService {
 
         Transactions transaction = buildManualTransaction(account, user, category,
                 request.date(), request.description(), request.amount(), "CREDIT");
-        return transactionMapper.toResponse(transactionRepository.save(transaction));
+        Transactions saved = transactionRepository.save(transaction);
+        analyticsService.recalculateMonth(userId, request.date().getYear(), request.date().getMonthValue());
+        return transactionMapper.toResponse(saved);
     }
 
     @Transactional(readOnly = true)
@@ -94,6 +100,8 @@ public class TransactionService {
     @Transactional
     public TransactionResponse update(UUID userId, UUID transactionId, TransactionUpdateRequest request) {
         Transactions transaction = findOwned(userId, transactionId);
+        LocalDate oldDate = JpaDateUtils.toLocalDate(transaction.getTransactionDate());
+
         Accounts account = findOwnedAccount(userId, request.accountId());
         Categories category = request.categoryId() != null
                 ? findActiveCategory(request.categoryId(), null)
@@ -113,13 +121,23 @@ public class TransactionService {
         recomputeFingerprint(transaction);
         transaction.setUpdatedAt(Date.from(Instant.now()));
 
-        return transactionMapper.toResponse(transactionRepository.save(transaction));
+        Transactions saved = transactionRepository.save(transaction);
+
+        LocalDate newDate = request.date();
+        analyticsService.recalculateMonth(userId, newDate.getYear(), newDate.getMonthValue());
+        if (oldDate.getYear() != newDate.getYear() || oldDate.getMonthValue() != newDate.getMonthValue()) {
+            analyticsService.recalculateMonth(userId, oldDate.getYear(), oldDate.getMonthValue());
+        }
+
+        return transactionMapper.toResponse(saved);
     }
 
     @Transactional
     public void delete(UUID userId, UUID transactionId) {
         Transactions transaction = findOwned(userId, transactionId);
+        LocalDate date = JpaDateUtils.toLocalDate(transaction.getTransactionDate());
         transactionRepository.delete(transaction);
+        analyticsService.recalculateMonth(userId, date.getYear(), date.getMonthValue());
     }
 
     @Transactional
@@ -140,6 +158,9 @@ public class TransactionService {
                 && !saved.getNormalizedMerchant().isBlank()) {
             userCategoryRuleService.upsert(userId, saved.getNormalizedMerchant(), category);
         }
+
+        LocalDate date = JpaDateUtils.toLocalDate(saved.getTransactionDate());
+        analyticsService.recalculateMonth(userId, date.getYear(), date.getMonthValue());
 
         return transactionMapper.toResponse(saved);
     }

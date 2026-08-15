@@ -1,5 +1,6 @@
 package com.amar.expense_tracker.statement.service;
 
+import com.amar.expense_tracker.analytics.service.AnalyticsService;
 import com.amar.expense_tracker.categorization.service.ExpenseCategorizationService;
 import com.amar.expense_tracker.entity.Accounts;
 import com.amar.expense_tracker.entity.Statements;
@@ -17,9 +18,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A separate bean (not a method on {@link StatementProcessingService}) so that
@@ -38,6 +42,7 @@ public class StatementTransactionPersister {
     private final MerchantNormalizer merchantNormalizer;
     private final TransactionHasher transactionHasher;
     private final ExpenseCategorizationService expenseCategorizationService;
+    private final AnalyticsService analyticsService;
 
     @Transactional
     public PersistResult persistAll(Statements statement, List<RawTransaction> rawTransactions) {
@@ -45,6 +50,7 @@ public class StatementTransactionPersister {
         Users user = statement.getUsers();
         int savedCount = 0;
         int duplicateCount = 0;
+        Set<YearMonth> affectedMonths = new LinkedHashSet<>();
 
         for (RawTransaction raw : rawTransactions) {
             String normalizedMerchant = merchantNormalizer.normalize(raw.description());
@@ -74,6 +80,7 @@ public class StatementTransactionPersister {
             transaction.setUpdatedAt(now);
             transactionRepository.save(transaction);
             savedCount++;
+            affectedMonths.add(YearMonth.from(raw.transactionDate()));
 
             try {
                 expenseCategorizationService.categorize(transaction);
@@ -81,6 +88,17 @@ public class StatementTransactionPersister {
                 // Categorization is best-effort: the transaction itself already saved
                 // successfully, and a categorization bug must not roll back the batch.
                 log.warn("Categorization failed for transaction [{}]: {}", transaction.getId(), e.getMessage());
+            }
+        }
+
+        for (YearMonth yearMonth : affectedMonths) {
+            try {
+                analyticsService.recalculateMonth(user.getId(), yearMonth.getYear(), yearMonth.getMonthValue());
+            } catch (Exception e) {
+                // Best-effort here too: the transactions themselves are already saved
+                // correctly; a future mutation for this user/month will self-heal the
+                // summary on its own next recalculation.
+                log.warn("Analytics recalculation failed for user [{}] {}: {}", user.getId(), yearMonth, e.getMessage());
             }
         }
 

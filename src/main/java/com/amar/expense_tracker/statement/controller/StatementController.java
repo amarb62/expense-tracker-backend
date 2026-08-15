@@ -3,6 +3,8 @@ package com.amar.expense_tracker.statement.controller;
 import com.amar.expense_tracker.auth.security.AuthenticatedUser;
 import com.amar.expense_tracker.statement.dto.StatementResponse;
 import com.amar.expense_tracker.statement.service.StatementService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -22,12 +24,18 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/statements")
 @RequiredArgsConstructor
+@Tag(name = "Statements", description = "Bank/credit-card PDF statement upload and async processing status")
 public class StatementController {
 
     private final StatementService statementService;
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.ACCEPTED)
+    @Operation(summary = "Upload a PDF statement for async parsing",
+            description = "Validates and stores the file, publishes a processing event, and returns "
+                    + "immediately with status PROCESSING -- parsing happens asynchronously. "
+                    + "If the PDF is password-protected, pass its password; it is used once to decrypt "
+                    + "and is never stored or logged.")
     public StatementResponse upload(@AuthenticationPrincipal AuthenticatedUser user,
                                      @RequestParam UUID accountId,
                                      @RequestParam("file") MultipartFile file,
@@ -36,11 +44,13 @@ public class StatementController {
     }
 
     @GetMapping
+    @Operation(summary = "List the current user's uploaded statements")
     public List<StatementResponse> list(@AuthenticationPrincipal AuthenticatedUser user) {
         return statementService.list(user.userId());
     }
 
     @GetMapping("/{id}")
+    @Operation(summary = "Get a statement's processing status by ID")
     public StatementResponse get(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
         return statementService.get(user.userId(), id);
     }

@@ -1,5 +1,6 @@
 package com.amar.expense_tracker.categorization.service;
 
+import com.amar.expense_tracker.analytics.service.AnalyticsService;
 import com.amar.expense_tracker.categorization.dto.CategorizationPatchRequest;
 import com.amar.expense_tracker.categorization.dto.ReviewItemResponse;
 import com.amar.expense_tracker.categorization.mapper.ReviewItemMapper;
@@ -7,6 +8,7 @@ import com.amar.expense_tracker.categorization.repository.AiCategorizationReposi
 import com.amar.expense_tracker.category.repository.CategoryRepository;
 import com.amar.expense_tracker.common.exception.BadRequestException;
 import com.amar.expense_tracker.common.exception.ResourceNotFoundException;
+import com.amar.expense_tracker.common.util.JpaDateUtils;
 import com.amar.expense_tracker.entity.AiCategorization;
 import com.amar.expense_tracker.entity.Categories;
 import com.amar.expense_tracker.entity.Transactions;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -40,6 +43,7 @@ public class CategorizationReviewService {
     private final UserCategoryRuleService userCategoryRuleService;
     private final ReviewItemMapper reviewItemMapper;
     private final TransactionMapper transactionMapper;
+    private final AnalyticsService analyticsService;
 
     @Transactional(readOnly = true)
     public List<ReviewItemResponse> listPendingReview(UUID userId) {
@@ -92,6 +96,9 @@ public class CategorizationReviewService {
                 && !saved.getNormalizedMerchant().isBlank()) {
             userCategoryRuleService.upsert(userId, saved.getNormalizedMerchant(), category);
         }
+
+        LocalDate date = JpaDateUtils.toLocalDate(saved.getTransactionDate());
+        analyticsService.recalculateMonth(userId, date.getYear(), date.getMonthValue());
 
         return transactionMapper.toResponse(saved);
     }

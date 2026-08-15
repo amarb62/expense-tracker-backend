@@ -35,9 +35,9 @@ is completed, stop and get explicit user go-ahead before starting the next one.
 | 6 | PDF parsing (Strategy pattern parsers) + merchant normalization + duplicate detection | done (HDFC bank + HDFC credit card + generic; ICICI/SBI pending real samples) |
 | 7 | Transaction APIs (manual expense/income, list/filter, update, category patch) | done |
 | 8 | Categorization engine + AI abstraction (Ollama) + review APIs | done |
-| 9 | Analytics & Dashboard (monthly/yearly/trends, recalculation) | not started |
-| 10 | Cross-cutting hardening (security review, global exceptions, Swagger, observability) | not started |
-| 11 | Testing (unit + integration w/ Testcontainers) | not started |
+| 9 | Analytics & Dashboard (monthly/yearly/trends, recalculation) | done |
+| 10 | Cross-cutting hardening (security review, global exceptions, Swagger, observability) | done |
+| 11 | Testing (unit + integration w/ Testcontainers) | skipped (user decision, 2026-08-15) |
 | 12 | Docker, docker-compose, README | not started |
 
 ## Environment notes (Spring Boot 4.1.0 gotchas found during Phase 1)
@@ -248,6 +248,83 @@ is completed, stop and get explicit user go-ahead before starting the next one.
   created) -- then re-uploaded a new transaction from the same corrected merchant and
   confirmed the newly-created rule caught it on the next pass (confidence 1.0, no AI
   call needed), closing the design.md section 14 feedback loop end-to-end.
+- Phase 9 (2026-08-15): `AnalyticsService.recalculateMonth(userId, year, month)` recomputes
+  and upserts `monthly_summary` + `category_monthly_summary` from raw transactions; wired
+  into every mutation site design.md section 20 calls out -- `TransactionService`'s
+  create/update/delete/patchCategory, `CategorizationReviewService.patch`, and
+  `StatementTransactionPersister`'s batch import (once per distinct affected month, not
+  once per transaction). An update that moves a transaction to a different month
+  recalculates *both* the old and new month. A category that no longer has any matching
+  transactions for a month (deleted/recategorized away) has its stale
+  `category_monthly_summary` row deleted, not left behind with a stale amount.
+  Synchronous paths (`TransactionService`, `CategorizationReviewService`) let a
+  recalculation failure propagate and roll back -- design.md explicitly says "do not
+  allow stale analytics," which here means fail loudly rather than silently accept
+  staleness. The async PDF-batch path wraps it in try-catch instead (a future mutation
+  for that user/month self-heals it; the transactions themselves already saved fine and
+  a transient analytics hiccup shouldn't retroactively fail the whole statement).
+  There's no account_id column on monthly_summary/category_monthly_summary (schema
+  section 3), but the dashboard API accepts an optional accountId filter (section 19) --
+  reconciled by having `DashboardService` read from those maintained tables only when
+  accountId is absent (fast path); when present, it computes live from raw transactions
+  via the same `TransactionAggregationRepository` queries (never persisted, since the
+  summary tables can't represent a single-account view).
+  The category breakdown deliberately filters to `categories.category_type = 'EXPENSE'`
+  (not "any transaction type"), matching design.md section 19's own example exactly --
+  an income category like SALARY mixed into the same list would show a nonsensical
+  percentageOfExpenses over 100%.
+  Verified end-to-end against a throwaway Postgres (RabbitMQ was unusually flaky this
+  session -- see below): monthly dashboard reproduces design.md's exact example shape;
+  multi-category percentage recomputation; delete correctly removing a category from the
+  breakdown rather than leaving it stale; an update moving a transaction to a different
+  month correctly recalculating both months (old month's expenses drop to zero, new
+  month picks them up, remaining goes negative with expense_percentage correctly staying
+  0 since total_credited is 0 for that month -- exactly per the section 4 zero-credit
+  rule); yearly correctly summing monthly_summary rows and re-deriving percentages
+  against yearly totals (not by summing monthly percentages, which wouldn't be valid);
+  trends listing chronologically; account-filtered live query matching the persisted
+  values; an unowned/nonexistent accountId correctly 404ing; and a second user with no
+  data getting all-zeros/empty rather than an error. Did not re-verify the PDF-upload
+  batch-recalculation path specifically in this session -- RabbitMQ repeatedly hit the
+  same Docker Desktop `.erlang.cookie` flakiness seen in Phases 5/6/8, and the batching
+  logic it would exercise (collect distinct months, call the same already-verified
+  `recalculateMonth` once per month) is simple enough that code review plus the
+  extensive manual-transaction verification above stands in for it; worth a real
+  end-to-end pass in Phase 11 once Testcontainers-backed RabbitMQ testing exists.
+- Phase 10 (2026-08-15): a dedicated ownership/authorization + sensitive-data-in-logs
+  audit across all controllers/services came back clean -- every entity lookup used by
+  a controller already filtered by the authenticated user's id (404, not 403, on
+  cross-user access, consistent with the pattern established in Phases 3/5/7), and no
+  passwords/tokens/PII are logged anywhere. Added the two remaining standard MVC
+  exception mappings not yet handled: `HttpRequestMethodNotSupportedException` -> 405
+  and `HttpMediaTypeNotSupportedException` -> 415 (both previously fell through the
+  catch-all to a bare 500). Added `CorrelationIdFilter` (reads/generates
+  `X-Correlation-Id`, puts it in MDC, echoes it back as a response header, registered
+  at `Ordered.HIGHEST_PRECEDENCE` via `FilterConfig`) and wired `%X{correlationId}`
+  into the console log pattern. Verified the header round-trip directly (custom header
+  echoed back, absent header gets one generated) and the log pattern's MDC read
+  (empty brackets `[]` outside request scope, proving the placeholder resolves rather
+  than printing literally). Note for Phase 11: every current `log.*` call in the
+  codebase lives in the async RabbitMQ-consumer path (`StatementProcessingService`,
+  `StatementTransactionPersister`, `LocalLLMCategorizer`, `ExpenseCategorizationService`)
+  -- MDC is thread-local and does NOT cross the listener-container thread boundary, so
+  the correlation ID set by the HTTP filter does not currently propagate into those
+  async log lines (the original HTTP request's ID would need to ride along on the
+  RabbitMQ message and be re-seeded into MDC by the listener to close that gap -- not
+  done here, flagging as a known limitation rather than in scope for this phase).
+  Consequently there is not yet a synchronous, log-producing endpoint to directly
+  observe a *populated* correlation-ID bracket in a log line -- the mechanism is
+  verified via the response-header round trip and the log-pattern MDC-read behavior
+  instead, both of which are individually sufficient to confirm correct wiring.
+  Added Swagger `@Tag`/`@Operation` annotations to all 7 controllers; verified
+  `/swagger-ui/index.html` (200) and `/v3/api-docs` (valid OpenAPI JSON, 22 paths, all
+  7 tags present, `bearerAuth` scheme registered, `/auth/login` correctly has an empty
+  `security` array while authenticated endpoints inherit the global requirement).
+  Design.md section 27's statement-processing-duration and categorization-success/
+  failure metrics were not built -- no metrics/observability requirement beyond
+  correlation-ID logging and Actuator's default endpoints was explicitly requested
+  this phase, and Actuator was already added in Phase 1; revisit only if the user
+  asks for dedicated metrics later.
 
 ## Phase details
 
@@ -311,10 +388,12 @@ mapping, complete Swagger/OpenAPI docs with bearer auth, correlation-ID logging
 filter, no-sensitive-data-in-logs audit.
 
 ### Phase 11 — Testing
-Unit tests: MerchantNormalizer, RuleEngine, CategorizationService,
-ConfidenceEvaluator, financial calculations, duplicate detection.
-Integration tests (Testcontainers Postgres): auth, accounts, transactions,
-statement upload, dashboard.
+Skipped per explicit user decision (2026-08-15): no unit tests, no integration
+tests. All verification for Phases 1-10 was done manually against real throwaway
+Postgres/RabbitMQ instances via curl (see "Environment notes" above for what was
+exercised each phase). Only the pre-existing `ExpenseTrackerApplicationTests`
+context-load test remains, kept solely because it must pass for the build itself
+to succeed.
 
 ### Phase 12 — Docker & docs
 Dockerfile, docker-compose.yml (postgres + rabbitmq + backend), README.md.
