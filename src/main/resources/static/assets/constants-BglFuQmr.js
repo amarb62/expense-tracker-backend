@@ -1,0 +1,1 @@
+var e=`Expensify`,t={high:.9,medium:.7},n=[`DEBIT`,`CREDIT`,`TRANSFER`,`REFUND`,`PAYMENT`,`FEE`,`INTEREST`,`CASH_WITHDRAWAL`],r={UPLOADED:`Uploaded`,PROCESSING:`Processing`,PROCESSED:`Processed`,FAILED:`Failed`},i=10485760;export{n as a,r as i,t as n,i as r,e as t};
