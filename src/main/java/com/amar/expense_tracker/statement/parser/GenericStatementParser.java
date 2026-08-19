@@ -1,12 +1,8 @@
 package com.amar.expense_tracker.statement.parser;
 
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -27,7 +23,7 @@ import java.util.regex.Pattern;
  */
 @Component
 @Order(Integer.MAX_VALUE)
-public class GenericStatementParser implements StatementParser {
+public class GenericStatementParser extends AbstractPdfStatementParser {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
@@ -60,17 +56,6 @@ public class GenericStatementParser implements StatementParser {
             transactions.add(new RawTransaction(date, description, amount, type));
         }
         return transactions;
-    }
-
-    private String extractText(InputStream pdf) {
-        try {
-            byte[] bytes = pdf.readAllBytes();
-            try (PDDocument document = Loader.loadPDF(bytes)) {
-                return new PDFTextStripper().getText(document);
-            }
-        } catch (IOException e) {
-            throw new StatementParsingException("Unable to read PDF content", e);
-        }
     }
 
     private LocalDate parseDate(String raw) {

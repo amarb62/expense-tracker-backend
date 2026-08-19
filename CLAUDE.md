@@ -452,6 +452,77 @@ PDF-derived transaction/`ai_categorization` rows without needing a real
 parseable bank statement), confirmed `./mvnw compile` and `./mvnw package
 -DskipTests` both succeed, then tore the throwaway containers down.
 
+## SBI bank statement parser + parser-package extensibility (2026-08-18)
+
+A real (password-protected) SBI "Statement of Account" export was failing to
+parse -- no `StatementParser` claimed it (institution string doesn't contain
+"HDFC"), so it fell through to `GenericStatementParser`, which requires an
+explicit per-line Dr/Cr marker SBI's layout doesn't have, and silently
+produced zero transactions rather than throwing.
+
+- **Extensibility refactor first**: pulled the PDFBox text-extraction
+  boilerplate (`Loader.loadPDF` + `PDFTextStripper`, try/catch ->
+  `StatementParsingException`) that all three existing parsers duplicated
+  verbatim into a new `AbstractPdfStatementParser` base class
+  (`statement/parser/AbstractPdfStatementParser.java`), with
+  `extractText(InputStream)` (default, content-stream order -- unchanged
+  behavior for the existing parsers) and an overload
+  `extractText(InputStream, boolean sortByPosition)` for parsers that need
+  visual row order instead. `HdfcBankStatementParser`,
+  `HdfcCreditCardStatementParser`, and `GenericStatementParser` now extend it
+  instead of each declaring their own private copy -- pure dedup, no behavior
+  change (still call the one-arg overload). A future bank parser just extends
+  the base class and implements `supports()`/`parse()`.
+- **`SbiBankStatementParser`** (`@Order(10)`, alongside the HDFC parsers):
+  `supports()` matches `institution` containing "SBI" or "STATE BANK"
+  (case-insensitive) + `accountType == "BANK_ACCOUNT"`. Real-statement finding:
+  SBI's content stream, like HDFC's, does *not* come out of PDFBox in visual
+  row order by default -- but unlike HDFC (where the running-balance-delta
+  workaround was needed), requesting `extractText(pdf, true)`
+  (`setSortByPosition(true)`) reliably reassembles each row onto one logical
+  line: `<txn date> <value date> <narration fragment> <ref/cheque no or -> <debit
+  or -> <credit or -> <balance>`. Debit/credit are explicit columns in this
+  layout (no running-balance inference needed), so a single regex per row
+  extracts date + amount + direction directly. Each row's narration still
+  wraps across 2-4 physical lines; the header line immediately preceding the
+  merged data line (e.g. "WDL TFR", "DEP TFR") is reattached as a prefix via
+  "last non-blank line before this match", but continuation lines *after* the
+  merged line (payee VPA/bank detail, branch reference) are dropped -- same
+  accepted trade-off `HdfcBankStatementParser` documents, and for the same
+  reason: the merchant-identifying token is already present in the fragment
+  captured on the merged line itself.
+- **Real `MerchantNormalizer` bug found and fixed**: its `REFERENCE_MARKER`
+  regex truncated descriptions at the *first* `*`, `#`, or `/`. SBI narrations
+  are formatted `UPI/DR/<refno>/<merchant>/...` -- the "/" lands immediately
+  after "UPI", so every single SBI UPI transaction was being normalized to the
+  merchant literal `"UPI"`, silently defeating both `RuleEngine` matching and
+  any user-created category rule for every SBI-sourced transaction (would have
+  looked like "SBI transactions never auto-categorize" if left unfound).
+  Fixed with a new `UPI_TXN_PREFIX` pattern (`UPI/(?:DR|CR)/\d+/`) matched and
+  stripped *before* the generic `REFERENCE_MARKER` path, converting remaining
+  `/` to spaces so the merchant segment survives into the normal
+  tokenization/skip-token pipeline. Also added "WDL", "DEP", "TFR", "DR", "CR"
+  to `SKIP_TOKENS` (SBI's bank-narration-category jargon, carried over
+  verbatim from the source statement, was otherwise winning as the "first
+  token" over the real merchant name).
+- Verified directly against the real statement (password provided by the
+  user; not committed anywhere, matching the existing password-handling
+  pattern from Phase 6): 13 transactions extracted (11 debits + 2 credits),
+  both totals reconciling *exactly* against the statement's own printed
+  summary line (Total Debits 7,993.00, Total Credits 1,552.00). Merchant
+  normalization spot-checked before/after the fix: every UPI transaction went
+  from normalizing to `"UPI"` to the correct payee token (BLINKIT, FLIPKART,
+  ONE97, SAMEER, SWEET, POOJA, SUMAN, DIVINE, PURABJI). Two same-day
+  self-transfer/ATM-style rows (no real merchant, description is just the
+  account holder's own name) normalize to a throwaway token ("OF") -- a
+  cosmetic non-issue, not a regression, since there's no real merchant to
+  extract from a self-transfer. Did not re-run the full upload -> RabbitMQ ->
+  persist round-trip for this specific statement in this session (verified
+  the parser + normalizer directly against the decrypted PDF bytes instead,
+  consistent with the "did not re-verify RabbitMQ path" notes elsewhere in
+  this file when the plumbing itself was already proven for other parsers);
+  `./mvnw package -DskipTests` passes.
+
 ## Phase details
 
 ### Phase 1 — Project setup, config, Flyway baseline, entity fixes

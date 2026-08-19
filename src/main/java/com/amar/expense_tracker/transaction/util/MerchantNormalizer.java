@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -16,14 +17,23 @@ import java.util.regex.Pattern;
 @Component
 public class MerchantNormalizer {
 
-    // Corporate suffixes (SWIGGY PVT LTD -> SWIGGY) and Indian payment-rail
-    // prefixes (UPI-SUMAN GURJAR... -> SUMAN GURJAR...) are both "not the
-    // merchant/payee identity" tokens, skipped the same way when picking the
-    // first meaningful token.
+    // Corporate suffixes (SWIGGY PVT LTD -> SWIGGY), Indian payment-rail
+    // prefixes (UPI-SUMAN GURJAR... -> SUMAN GURJAR...), and bank narration
+    // jargon carried over verbatim from source statements (SBI's "WDL TFR"/
+    // "DEP TFR" transaction-category prefixes) are all "not the merchant/payee
+    // identity" tokens, skipped the same way when picking the first
+    // meaningful token.
     private static final Set<String> SKIP_TOKENS = Set.of(
             "PVT", "LTD", "LIMITED", "LLC", "INC", "PRIVATE", "CO", "COMPANY",
-            "UPI", "NEFT", "IMPS", "RTGS", "ECS", "NACH", "ACH");
+            "UPI", "NEFT", "IMPS", "RTGS", "ECS", "NACH", "ACH",
+            "WDL", "DEP", "TFR", "DR", "CR");
 
+    // SBI narrations encode the payee/merchant AFTER the "UPI/DR|CR/<ref>/"
+    // segment (e.g. "UPI/DR/311589015801/BLINKIT/AIRP/blinkitjkb/Pay v"), not
+    // before it -- the generic REFERENCE_MARKER truncation below would
+    // otherwise discard exactly that part, since it cuts at the very first "/"
+    // (right after "UPI"). Matched and stripped before the generic path runs.
+    private static final Pattern UPI_TXN_PREFIX = Pattern.compile("UPI/(?:DR|CR)/\\d+/");
     private static final Pattern REFERENCE_MARKER = Pattern.compile("[*#/].*$");
     private static final Pattern DIGIT_RUN = Pattern.compile("\\d{4,}");
     private static final Pattern NON_ALNUM_SPACE = Pattern.compile("[^A-Z0-9 ]");
@@ -35,7 +45,13 @@ public class MerchantNormalizer {
         }
 
         String text = rawDescription.toUpperCase(Locale.ROOT).trim();
-        text = REFERENCE_MARKER.matcher(text).replaceAll("");
+
+        Matcher upiPrefixMatcher = UPI_TXN_PREFIX.matcher(text);
+        if (upiPrefixMatcher.find()) {
+            text = upiPrefixMatcher.replaceAll("").replace('/', ' ');
+        } else {
+            text = REFERENCE_MARKER.matcher(text).replaceAll("");
+        }
         text = DIGIT_RUN.matcher(text).replaceAll("");
         text = NON_ALNUM_SPACE.matcher(text).replaceAll(" ");
         text = MULTI_SPACE.matcher(text).replaceAll(" ").trim();
